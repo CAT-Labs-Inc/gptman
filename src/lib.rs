@@ -745,8 +745,29 @@ impl GPT {
     {
         use self::Error::*;
 
-        reader.seek(SeekFrom::Start(sector_size))?;
-        let header = GPTHeader::read_from(&mut reader).or_else(|primary_err| {
+        let primary: Result<(GPTHeader, Vec<GPTPartitionEntry>)> = (|| {
+            reader.seek(SeekFrom::Start(sector_size))?;
+            let header = GPTHeader::read_from(&mut reader)?;
+            let mut partitions =
+                Vec::with_capacity(header.number_of_partition_entries as usize);
+            for i in 0..header.number_of_partition_entries {
+                reader.seek(SeekFrom::Start(
+                    header.partition_entry_lba * sector_size
+                        + u64::from(i) * u64::from(header.size_of_partition_entry),
+                ))?;
+                partitions.push(GPTPartitionEntry::read_from(&mut reader)?);
+            }
+            let sum = header.generate_partition_entry_array_crc32(&partitions);
+            if header.partition_entry_array_crc32 != sum {
+                return Err(InvalidPartitionEntryArrayChecksum(
+                    header.partition_entry_array_crc32,
+                    sum,
+                ));
+            }
+            Ok((header, partitions))
+        })();
+
+        let (header, partitions) = primary.or_else(|primary_err| {
             let len = reader.seek(SeekFrom::End(0))?;
             if len < sector_size {
                 return Err(InvalidSignature);
@@ -754,30 +775,31 @@ impl GPT {
 
             reader.seek(SeekFrom::Start((len / sector_size - 1) * sector_size))?;
 
-            GPTHeader::read_from(&mut reader).map_err(|backup_err| {
-                match (primary_err, backup_err) {
+            GPTHeader::read_from(&mut reader)
+                .and_then(|header| {
+                    let mut partitions =
+                        Vec::with_capacity(header.number_of_partition_entries as usize);
+                    for i in 0..header.number_of_partition_entries {
+                        reader.seek(SeekFrom::Start(
+                            header.partition_entry_lba * sector_size
+                                + u64::from(i) * u64::from(header.size_of_partition_entry),
+                        ))?;
+                        partitions.push(GPTPartitionEntry::read_from(&mut reader)?);
+                    }
+                    let sum = header.generate_partition_entry_array_crc32(&partitions);
+                    if header.partition_entry_array_crc32 != sum {
+                        return Err(InvalidPartitionEntryArrayChecksum(
+                            header.partition_entry_array_crc32,
+                            sum,
+                        ));
+                    }
+                    Ok((header, partitions))
+                })
+                .map_err(|backup_err| match (primary_err, backup_err) {
                     (InvalidSignature, InvalidSignature) => InvalidSignature,
-                    (x, y) => Error::ReadError(Box::new(x), Box::new(y)),
-                }
-            })
+                    (x, y) => ReadError(Box::new(x), Box::new(y)),
+                })
         })?;
-
-        let mut partitions = Vec::with_capacity(header.number_of_partition_entries as usize);
-        for i in 0..header.number_of_partition_entries {
-            reader.seek(SeekFrom::Start(
-                header.partition_entry_lba * sector_size
-                    + u64::from(i) * u64::from(header.size_of_partition_entry),
-            ))?;
-            partitions.push(GPTPartitionEntry::read_from(&mut reader)?);
-        }
-
-        let sum = header.generate_partition_entry_array_crc32(&partitions);
-        if header.partition_entry_array_crc32 != sum {
-            return Err(Error::InvalidPartitionEntryArrayChecksum(
-                header.partition_entry_array_crc32,
-                sum,
-            ));
-        }
 
         let align = GPT::find_alignment(&header, &partitions);
 
