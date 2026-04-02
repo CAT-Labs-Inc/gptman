@@ -748,8 +748,7 @@ impl GPT {
         let primary: Result<(GPTHeader, Vec<GPTPartitionEntry>)> = (|| {
             reader.seek(SeekFrom::Start(sector_size))?;
             let header = GPTHeader::read_from(&mut reader)?;
-            let mut partitions =
-                Vec::with_capacity(header.number_of_partition_entries as usize);
+            let mut partitions = Vec::with_capacity(header.number_of_partition_entries as usize);
             for i in 0..header.number_of_partition_entries {
                 reader.seek(SeekFrom::Start(
                     header.partition_entry_lba * sector_size
@@ -1094,8 +1093,7 @@ impl GPT {
     pub fn find_last_place(&self, size: u64) -> Option<u64> {
         self.find_free_sectors()
             .iter()
-            .filter(|(_, l)| *l >= size)
-            .last()
+            .rfind(|(_, l)| *l >= size)
             .map(|(i, l)| (i + l - size) / self.align * self.align)
     }
 
@@ -1969,7 +1967,7 @@ mod test {
     }
 
     #[test]
-    fn gpt_find_from_on_image_with_corrupted_crc32_in_primary(){
+    fn gpt_find_from_on_image_with_corrupted_crc32_in_primary() {
         let mut f = fs::File::open(DISK5).unwrap();
         let gpt = GPT::read_from(&mut f, 512);
         assert!(gpt.is_ok())
