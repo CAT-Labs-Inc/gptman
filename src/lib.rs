@@ -1387,6 +1387,7 @@ mod test {
     const DISK2: &str = "tests/fixtures/disk2.img";
     const DISK3: &str = "tests/fixtures/disk3.img";
     const DISK4: &str = "tests/fixtures/disk4.img";
+    const DISK5: &str = "tests/fixtures/disk5.img";
 
     #[test]
     fn read_header_and_partition_entries() {
@@ -1965,6 +1966,13 @@ mod test {
         }
         test(DISK3, 512);
         test(DISK4, 4096);
+    }
+
+    #[test]
+    fn gpt_find_from_on_image_with_corrupted_crc32_in_primary(){
+        let mut f = fs::File::open(DISK5).unwrap();
+        let gpt = GPT::read_from(&mut f, 512);
+        assert!(gpt.is_ok())
     }
 }
 
