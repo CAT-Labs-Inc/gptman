@@ -272,6 +272,36 @@ impl GPTHeader {
         Ok(gpt)
     }
 
+    /// Read and validate the partition entry array that belongs to this header.
+    ///
+    /// Seeks to each partition entry using `partition_entry_lba` and `sector_size`, reads all
+    /// entries, then verifies `partition_entry_array_crc32`.
+    pub fn read_partitions<R>(
+        &self,
+        reader: &mut R,
+        sector_size: u64,
+    ) -> Result<Vec<GPTPartitionEntry>>
+    where
+        R: Read + Seek + ?Sized,
+    {
+        let mut partitions = Vec::with_capacity(self.number_of_partition_entries as usize);
+        for i in 0..self.number_of_partition_entries {
+            reader.seek(SeekFrom::Start(
+                self.partition_entry_lba * sector_size
+                    + u64::from(i) * u64::from(self.size_of_partition_entry),
+            ))?;
+            partitions.push(GPTPartitionEntry::read_from(reader)?);
+        }
+        let sum = self.generate_partition_entry_array_crc32(&partitions);
+        if self.partition_entry_array_crc32 != sum {
+            return Err(Error::InvalidPartitionEntryArrayChecksum(
+                self.partition_entry_array_crc32,
+                sum,
+            ));
+        }
+        Ok(partitions)
+    }
+
     /// Write the GPT header into a writer. This operation will update the CRC32 checksums of the
     /// current struct and seek at the location `primary_lba` before trying to write to disk.
     pub fn write_into<W>(
@@ -748,21 +778,7 @@ impl GPT {
         let primary: Result<(GPTHeader, Vec<GPTPartitionEntry>)> = (|| {
             reader.seek(SeekFrom::Start(sector_size))?;
             let header = GPTHeader::read_from(&mut reader)?;
-            let mut partitions = Vec::with_capacity(header.number_of_partition_entries as usize);
-            for i in 0..header.number_of_partition_entries {
-                reader.seek(SeekFrom::Start(
-                    header.partition_entry_lba * sector_size
-                        + u64::from(i) * u64::from(header.size_of_partition_entry),
-                ))?;
-                partitions.push(GPTPartitionEntry::read_from(&mut reader)?);
-            }
-            let sum = header.generate_partition_entry_array_crc32(&partitions);
-            if header.partition_entry_array_crc32 != sum {
-                return Err(InvalidPartitionEntryArrayChecksum(
-                    header.partition_entry_array_crc32,
-                    sum,
-                ));
-            }
+            let partitions = header.read_partitions(&mut reader, sector_size)?;
             Ok((header, partitions))
         })();
 
@@ -776,22 +792,7 @@ impl GPT {
 
             GPTHeader::read_from(&mut reader)
                 .and_then(|header| {
-                    let mut partitions =
-                        Vec::with_capacity(header.number_of_partition_entries as usize);
-                    for i in 0..header.number_of_partition_entries {
-                        reader.seek(SeekFrom::Start(
-                            header.partition_entry_lba * sector_size
-                                + u64::from(i) * u64::from(header.size_of_partition_entry),
-                        ))?;
-                        partitions.push(GPTPartitionEntry::read_from(&mut reader)?);
-                    }
-                    let sum = header.generate_partition_entry_array_crc32(&partitions);
-                    if header.partition_entry_array_crc32 != sum {
-                        return Err(InvalidPartitionEntryArrayChecksum(
-                            header.partition_entry_array_crc32,
-                            sum,
-                        ));
-                    }
+                    let partitions = header.read_partitions(&mut reader, sector_size)?;
                     Ok((header, partitions))
                 })
                 .map_err(|backup_err| match (primary_err, backup_err) {
