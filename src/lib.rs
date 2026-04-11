@@ -1969,8 +1969,17 @@ mod test {
     #[test]
     fn gpt_read_from_on_image_with_corrupted_partition_entry_array_crc32_in_primary() {
         let mut f = fs::File::open(DISK5).unwrap();
-        let gpt = GPT::read_from(&mut f, 512);
-        assert!(gpt.is_ok())
+        let gpt = GPT::read_from(&mut f, 512).unwrap();
+        // Verify that the backup header was actually used, not the primary.
+        // In a backup header, primary_lba points to the backup's own location
+        // (last sector) and backup_lba points back to 1 (the primary's location).
+        let end = f.seek(SeekFrom::End(0)).unwrap() / 512 - 1;
+        assert_eq!(gpt.header.primary_lba, end);
+        assert_eq!(gpt.header.backup_lba, 1);
+        assert_eq!(
+            gpt.header.partition_entry_lba,
+            gpt.header.last_usable_lba + 1
+        );
     }
 }
 
